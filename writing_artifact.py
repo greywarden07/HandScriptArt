@@ -384,6 +384,36 @@ def get_back(code: background_code, paths: List[str], size: Tuple[int, int]) -> 
         back = cv2.flip(back, 0)
     return back
 
+def apply_hand_drawn_effect(img: imgRGB) -> imgRGB:
+    """Detect line drawings and apply low-frequency noise to give a hand-drawn effect."""
+    # Convert to grayscale for edge detection
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Detect edges (line drawings)
+    edges = cv2.Canny(gray, 50, 150)
+    
+    # Dilate edges slightly to make them more prominent
+    edges = cv2.dilate(edges, np.ones((2, 2), np.uint8))
+    
+    # Generate low-frequency Perlin noise
+    noise = perlin(img.shape[:2], res=(12, 12)) * 15
+    
+    # Normalize noise to 0-255 range
+    noise = cv2.normalize(noise, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    
+    # Create colored noise (same for all channels for grayscale effect)
+    noise_colored = cv2.merge((noise, noise, noise))
+    
+    # Create a mask from the edges
+    edge_mask = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+    
+    # Apply noise only to the detected edges
+    hand_drawn = img.copy()
+    hand_drawn_edges = cv2.addWeighted(img, 0.85, noise_colored, 0.15, 0)
+    
+    # Combine the noisy edges with the original image
+    return cv2.bitwise_and(hand_drawn_edges, edge_mask) + cv2.bitwise_and(img, cv2.bitwise_not(edge_mask))
+
 
 def do_artifact(img: imgRGB, back: imgRGB, *,
                 text_shift_scale: int = 64,
@@ -396,6 +426,10 @@ def do_artifact(img: imgRGB, back: imgRGB, *,
     H, W, _ = img.shape
     mask, orig = extract_mask(img)
     orig = preprocess(orig)
+    
+    # Apply hand-drawn effect to the preprocessed image
+    orig = apply_hand_drawn_effect(orig)
+    
     img_dispx = perlin((H, W), (text_shift_scale, text_shift_scale))
     img_dispy = perlin((H, W), (text_shift_scale, text_shift_scale))
     disp_img = displace_image(orig, -0.363636364*text_shift_factor*img_dispx, text_shift_factor*img_dispy)
@@ -426,6 +460,9 @@ def do_artifact(img: imgRGB, back: imgRGB, *,
         None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX
     )
     return on_page_img
+
+
+
 
 
 parser = argparse.ArgumentParser(description='Generate handwritten like text.',
