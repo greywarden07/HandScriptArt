@@ -212,20 +212,82 @@ def get_n_shortest_line_idx(img: imgGray, white_rows: List[int], n: int) -> List
     """Return the index of the n shortest lines in img. First two lines are ignored."""
     widths = []
     l = len(white_rows)
+    
+    # Check if we have enough rows to process
+    if l < 7:  # Need at least 7 rows to start from index 5
+        print(f"Not enough text lines detected (found {l//2} lines, need at least 4)")
+        return [len(white_rows)//2] if len(white_rows) > 2 else []
+    
     for i in range(5, l, 2):  # ignore first two
+        if i+1 >= l:  # Make sure we don't go out of bounds
+            break
+            
         seg = img[white_rows[i]:white_rows[i+1]]
-        top_height = white_rows[i] - white_rows[i-1]
+        
+        # Check if segment has valid dimensions
+        if seg.shape[0] == 0 or seg.shape[1] == 0:
+            continue
+            
+        top_height = white_rows[i] - white_rows[i-1] if i > 0 else 1
         down_height = (white_rows[i+2] if i+2 < l else img.shape[0]) - white_rows[i+1]
-        widths.append((
-            cv2.boundingRect(
-                np.concatenate(extract_contours(255 - seg))
-            )[2] * top_height / down_height,
-            i // 2
-        ))
+        
+        # Ensure heights are positive
+        if top_height <= 0:
+            top_height = 1
+        if down_height <= 0:
+            down_height = 1
+            
+        # Extract contours from the segment
+        contours = extract_contours(255 - seg)
+        
+        # Check if we have valid contours
+        if not contours or len(contours) == 0:
+            continue
+            
+        # Filter out very small contours
+        valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 10]
+        
+        if not valid_contours:
+            continue
+            
+        try:
+            # Concatenate contours and get bounding rectangle
+            all_points = np.concatenate(valid_contours)
+            rect = cv2.boundingRect(all_points)
+            
+            # Check if bounding rectangle is valid
+            if rect[2] <= 0 or rect[3] <= 0:  # width or height <= 0
+                continue
+                
+            width_ratio = rect[2] * top_height / down_height
+            widths.append((width_ratio, i // 2))
+            
+        except Exception as e:
+            print(f"Error processing contour at line {i//2}: {e}")
+            continue
+    
+    # If no valid widths were found, return a default
+    if not widths:
+        print("No valid text segments found for processing")
+        # Return middle lines as default
+        num_lines = l // 2
+        if num_lines > 2:
+            return [num_lines // 2]
+        else:
+            return []
+    
+    # Ensure n doesn't exceed available lines
+    n = min(n, len(widths))
+    
     widths.sort()
     breaks = sorted(i for e, i in widths[:n])
-    if breaks[-1] != len(widths) + 1:  # last line shouldn't be the start
+    
+    # Ensure we have at least one break and it's not the last line
+    if not breaks:
+        breaks = [len(widths) // 2] if len(widths) > 0 else []
+    elif breaks[-1] != len(widths) + 1:  # last line shouldn't be the start
         breaks.append(len(widths) + 1)
+    
     return breaks
 
 
@@ -424,7 +486,19 @@ def do_artifact(img: imgRGB, back: imgRGB, *,
                 ) -> imgRGB:
     """Add the handwritten text artifacts."""
     H, W, _ = img.shape
+    
+    # Validate image dimensions
+    if H <= 0 or W <= 0:
+        raise ValueError(f"Invalid image dimensions: {H}x{W}")
+    
     mask, orig = extract_mask(img)
+    
+    # Check if mask is valid
+    if mask is None or mask.size == 0:
+        print("Warning: No mask extracted, using original image")
+        mask = np.zeros((H, W), dtype=np.uint8)
+        orig = img
+    
     orig = preprocess(orig)
     
     # Apply hand-drawn effect to the preprocessed image
@@ -441,14 +515,47 @@ def do_artifact(img: imgRGB, back: imgRGB, *,
     disp_strikes = displace_image(strikes, None, perlin((H, W), (16, 16))*7, (0, 0, 0))
     striked_img = put_strikes(disp_img, disp_strikes, hull)
     rows, bin_img = get_white_rows(striked_img)
-    print('Found', len(rows)//2, 'lines in image.')
-    small_lines = get_n_shortest_line_idx(bin_img, rows, np.random.randint(
-        max(len(rows)//12-3, 1),
-        max(len(rows)//12+1, 3)
-    ))
-    # imshow(draw_rows(striked_img, rows, small_lines))
-    moved_img = perform_moves(striked_img, W, rows, line_move_factor)
-    slanted_img = perform_slants(moved_img, small_lines, rows, line_slant_factor)
+    
+    num_lines = len(rows) // 2
+    print('Found', num_lines, 'lines in image.')
+    
+    # Check if we have enough lines to process
+    if num_lines < 2:
+        print("Warning: Not enough text lines detected. Applying minimal processing.")
+        # Apply minimal processing without line-specific effects
+        faded_img = put_fading(striked_img, perlin((H, W), (text_shift_scale, text_shift_scale)), text_fade_factor)
+        norm_back = cv2.normalize(
+            cv2.cvtColor(back, cv2.COLOR_BGR2GRAY),
+            None, alpha=0, beta=1, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32F
+        )
+        page_morphed_img = displace_image(faded_img, None, 40-60*norm_back)
+        on_page_img = cv2.normalize(
+            (back * (page_morphed_img/255)).astype(np.uint8),
+            None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX
+        )
+        return on_page_img
+    
+    try:
+        small_lines = get_n_shortest_line_idx(bin_img, rows, np.random.randint(
+            max(num_lines//12-3, 1),
+            max(num_lines//12+1, 3)
+        ))
+    except Exception as e:
+        print(f"Error getting shortest lines: {e}")
+        small_lines = []
+    
+    # If no small lines found, use default processing
+    if not small_lines:
+        small_lines = [num_lines // 2] if num_lines > 2 else []
+    
+    try:
+        moved_img = perform_moves(striked_img, W, rows, line_move_factor)
+        slanted_img = perform_slants(moved_img, small_lines, rows, line_slant_factor)
+    except Exception as e:
+        print(f"Error during line processing: {e}")
+        # Fall back to original striked image
+        slanted_img = striked_img
+    
     faded_img = put_fading(slanted_img, perlin((H, W), (text_shift_scale, text_shift_scale)), text_fade_factor)
     norm_back = cv2.normalize(
         cv2.cvtColor(back, cv2.COLOR_BGR2GRAY),
