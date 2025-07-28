@@ -1,26 +1,15 @@
 from flask import Flask, request, send_file, render_template
-from google.cloud import storage
 import subprocess
 import os
 import uuid
+from PIL import Image
 
 app = Flask(__name__)
-
-# Set up Google Cloud Storage client
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "Your Service Account.json"
-storage_client = storage.Client()
-bucket_name = 'Your Bucket Name'
-bucket = storage_client.bucket(bucket_name)
 
 UPLOAD_FOLDER = 'uploads'
 PROCESSED_FOLDER = 'out'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(PROCESSED_FOLDER, exist_ok=True)
-
-def upload_to_gcs(local_file_path, destination_blob_name):
-    blob = bucket.blob(destination_blob_name)
-    blob.upload_from_filename(local_file_path)
-    return blob.public_url
 
 @app.route('/')
 def index():
@@ -54,24 +43,73 @@ def upload_file():
             '-f', 'png'
         ]
         
-        # Log command for debugging
-        print("Running command:", " ".join(command))
-        
-        # Run the processing script
-        result = subprocess.run(command, capture_output=True, text=True)
-        
-        # Log subprocess output for debugging
-        print("Subprocess output:", result.stdout)
-        print("Subprocess error:", result.stderr)
-        
-        # Upload processed file to Google Cloud Storage
-        processed_blob_url = upload_to_gcs(processed_path, processed_filename)
-        
-        # Remove local files
-        os.remove(upload_path)
-        os.remove(processed_path)
-        
-        return f'Processed file available at: <a href="{processed_blob_url}">{processed_blob_url}</a>'
+        try:
+            # Run the processing script with timeout
+            result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+            
+            # Check if subprocess failed or returned error
+            if result.returncode != 0:
+                return f"Processing failed: The image may not contain suitable text or the format is unsupported.", 400
+            
+            # Check if the subprocess output indicates failure
+            if "Could not process image" in result.stdout or "high <= 0" in result.stdout:
+                return "Processing failed: The image may not contain suitable text for handwriting conversion.", 400
+            
+            # Check if processed file actually exists
+            if not os.path.exists(processed_path):
+                return "Processing completed but output file was not generated.", 500
+            
+            # Return success response with download link
+            return f'''
+            <div style="text-align: center; font-family: Arial, sans-serif; padding: 20px;">
+                <h2>✅ Processing Complete!</h2>
+                <p>Your handwritten-style image has been generated successfully.</p>
+                <a href="/download/{processed_filename}" 
+                   style="display: inline-block; background: #4CAF50; color: white; 
+                          padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 10px;">
+                    📥 Download Processed Image
+                </a>
+                <br><br>
+                <a href="/" style="color: #007bff;">← Process Another Image</a>
+            </div>
+            '''
+            
+        except subprocess.TimeoutExpired:
+            return "Processing timeout: The image took too long to process.", 500
+        except Exception as e:
+            return f"An unexpected error occurred: {str(e)}", 500
+        finally:
+            # Clean up uploaded file
+            try:
+                if os.path.exists(upload_path):
+                    os.remove(upload_path)
+            except Exception as e:
+                print(f"Could not remove uploaded file: {e}")
 
-    return "Invalid file type", 400
+    return "Invalid file type. Please upload a PNG, JPG, or JPEG image.", 400
 
+@app.route('/download/<filename>')
+def download_file(filename):
+    """Serve processed files for download"""
+    file_path = os.path.join(PROCESSED_FOLDER, filename)
+    if os.path.exists(file_path):
+        return send_file(file_path, as_attachment=True)
+    else:
+        return "File not found", 404
+
+@app.route('/out/<filename>')
+def serve_processed_file(filename):
+    """Serve processed files for viewing"""
+    file_path = os.path.join(PROCESSED_FOLDER, filename)
+    if os.path.exists(file_path):
+        return send_file(file_path)
+    else:
+        return "File not found", 404
+
+if __name__ == '__main__':
+    # Use environment variables for production
+    host = os.environ.get('HOST', '0.0.0.0')
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
+    
+    app.run(host=host, port=port, debug=debug)
