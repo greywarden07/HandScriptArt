@@ -1,2 +1,13 @@
-/gen-lang-client-0599130315-06ceae801a0a.json
-/__pycache__
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+.env
+.venv/
+uploads/*
+out/*
+.DS_Store
+*.log
+node_modules/
