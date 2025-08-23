@@ -19,6 +19,22 @@
 - 🐳 **Docker Support**: Easy deployment with containerization
 - 📱 **Mobile Friendly**: Responsive design that works on all devices
 
+## 🏗️ System Architecture
+
+The HandScript Art application follows a clean 5-layer architecture designed for scalability and maintainability:
+
+![System Architecture](diagram.png)
+
+### Architecture Overview
+
+- **Layer 1: Frontend** - Client browser interface serving the web application
+- **Layer 2: Application/API** - Flask web server handling HTTP requests and responses
+- **Layer 3: Processing Pipeline** - Core image processing engine with AI algorithms
+- **Layer 4: Storage** - File system for uploads, outputs, and dependencies
+- **Layer 5: Orchestration** - Docker Compose for service coordination and deployment
+
+The system processes images through a streamlined pipeline where the frontend sends images via HTTP POST to the Flask API, which then orchestrates the image processing pipeline using OpenCV, NumPy, and Pillow libraries to generate handwritten-style artifacts.
+
 ## 🚀 Quick Start
 
 ### Using Docker (Recommended)
